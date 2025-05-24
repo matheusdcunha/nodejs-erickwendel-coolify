@@ -1,4 +1,4 @@
-name: Run tests
+name: CI/CD with Tests and Coolify Deployment
 
 on:
   push:
@@ -6,34 +6,97 @@ on:
       - '**.js'
       - '**.json'
       - '**.yaml'
+      - 'Dockerfile' # Adicione o Dockerfile ou o que for relevante para o build da imagem
     branches:
       - main
 concurrency:
-  group: staging_environment
+  group: ${{ github.workflow }}-${{ github.ref }} # Alterado para ser mais específico
   cancel-in-progress: true
 
 jobs:
   setup-and-test-app:
     runs-on: ubuntu-latest
+    outputs: # Definir outputs se o próximo job precisar de informações daqui
+      image_tag: ${{ steps.docker_meta.outputs.tags }} # Exemplo se você usar docker/metadata-action
     steps:
-        - name: Checkout repository
-          uses: actions/checkout@v4
-        - name: Install Docker Compose
-          run: |
-            sudo curl -L "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-            sudo chmod +x /usr/local/bin/docker-compose
-            docker-compose --version
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-        - name: Start Postgres and Adminer
-          run: docker-compose up -d mongodb
+      - name: Install Docker Compose
+        run: |
+          sudo curl -L "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+          sudo chmod +x /usr/local/bin/docker-compose
+          docker-compose --version
 
-        - name: Use Node.js
-          uses: actions/setup-node@v4
-          with:
-            node-version: 20
+      - name: Start services (e.g., mongodb)
+        # Se o seu build Docker precisar do MongoDB, você pode mantê-lo.
+        # Caso contrário, se o build for independente, este passo pode não ser necessário aqui
+        # ou ser específico para o ambiente de teste.
+        run: docker-compose up -d mongodb
 
-        - name: Restore Dependencies for web-api
-          run: npm ci
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
 
-        - name: Run Tests for app/web-api
-          run: npm test
+      - name: Restore Dependencies for web-api
+        run: npm ci # Assumindo que seu package-lock.json está na raiz ou no diretório de trabalho correto
+
+      - name: Run Tests for app/web-api
+        # Certifique-se de que o diretório de trabalho está correto se o package.json não estiver na raiz
+        # working-directory: ./app/web-api # Exemplo
+        run: npm test
+
+      # --- Adicione os passos para build e push da imagem Docker aqui ---
+      # --- Ou, idealmente, em um job separado que depende deste ---
+
+  deploy-to-coolify:
+    runs-on: ubuntu-latest
+    needs: setup-and-test-app # Garante que este job só roda se setup-and-test-app for bem-sucedido
+    # Só executa no branch main
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Etapa 1: Login no Docker Registry (Exemplo com GHCR)
+      # Você precisará de um Personal Access Token (PAT) com permissões de `write:packages`
+      # Adicione este PAT como um secret no seu repositório chamado GH_PAT
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }} # Usuário do GitHub que iniciou o workflow
+          password: ${{ secrets.GH_PAT }} # Secret contendo o PAT
+      # Etapa 3: Build e Push da Imagem Docker
+      # Certifique-se de que você tem um Dockerfile na raiz do seu projeto
+      # ou especifique o caminho para ele.
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: . # Contexto do build (onde o Dockerfile está)
+          file: ./Dockerfile # Caminho para o Dockerfile (se não for ./Dockerfile)
+          push: true # Define como true para enviar para o registro
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      # Etapa 4: Acionar o Webhook do Coolify
+      # Certifique-se de ter os secrets COOLIFY_WEBHOOK e COOLIFY_TOKEN configurados no seu repositório GitHub.
+      - name: Trigger Coolify Deployment
+        env:
+          COOLIFY_WEBHOOK_URL: ${{ secrets.COOLIFY_WEBHOOK }}
+          COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+        run: |
+          if [ -z "$COOLIFY_WEBHOOK_URL" ]; then
+            echo "COOLIFY_WEBHOOK secret não está configurado."
+            exit 1
+          fi
+          if [ -z "$COOLIFY_API_TOKEN" ]; then
+            echo "COOLIFY_TOKEN secret não está configurado."
+            exit 1
+          fi
+          echo "Acionando o webhook do Coolify..."
+          curl --request GET "${COOLIFY_WEBHOOK_URL}" \
+               --header "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
+               --fail # Faz o curl falhar se o status HTTP for >= 400
+          echo "Webhook do Coolify acionado com sucesso."
