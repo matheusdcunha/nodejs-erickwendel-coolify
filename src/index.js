@@ -25,6 +25,10 @@ fastify.get('/v1/customers', async (request, reply) => {
     return reply.code(200).send(users)
 })
 
+fastify.get("/v1/deploy", ()=>{
+
+    return {message: "Deploy concluido ✅"}
+})
 fastify.get('/v1/customers/:id', {
     schema: {
         response: {
