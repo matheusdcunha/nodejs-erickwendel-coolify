@@ -68,6 +68,19 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }} # Usuário do GitHub que iniciou o workflow
           password: ${{ secrets.GH_PAT }} # Secret contendo o PAT
+
+      # Etapa 2: Extrair metadados da imagem (opcional, mas recomendado para versionamento)
+      # Isso ajuda a criar tags dinâmicas para sua imagem, como o SHA do commit.
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/coolify_test # Substitua pelo nome da sua imagem
+          # Exemplo: ghcr.io/seu-usuario/meu-app
+          tags: |
+            type=sha # Gera uma tag com o SHA do commit, ex: sha-abcdef1
+            type=raw,value=latest,enable={{is_default_branch}} # Gera 'latest' para o branch padrão (main)
+
       # Etapa 3: Build e Push da Imagem Docker
       # Certifique-se de que você tem um Dockerfile na raiz do seu projeto
       # ou especifique o caminho para ele.
